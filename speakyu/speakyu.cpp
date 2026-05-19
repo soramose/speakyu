@@ -3,6 +3,8 @@
 #include <commdlg.h>
 #include <CommCtrl.h>
 #include <vector>
+#include <string>
+#include <memory>
 #include "resource.h"
 
 #pragma comment(linker,"\"/manifestdependency:type='win32' \
@@ -124,29 +126,24 @@ BOOL getFileName(TCHAR* filename, int size) {
     return GetSaveFileName(&ofn);
 }
 
-struct THREAD_DATA {
-    wchar_t* text;
+struct ThreadData {
+    std::wstring text;
     int speed;
     int voiceIndex;
 };
 
 // --- çƒê∂ÉXÉåÉbÉh ---
 DWORD WINAPI PlayThread(LPVOID lpParam) {
-    THREAD_DATA* data = (THREAD_DATA*)lpParam;
+    std::unique_ptr<ThreadData> data(static_cast<ThreadData*>(lpParam));
 
-    int nLen = WideCharToMultiByte(CP_ACP, 0, data->text, -1, NULL, 0, NULL, NULL);
+    int nLen = WideCharToMultiByte(CP_ACP, 0, data->text.c_str(), -1, NULL, 0, NULL, NULL);
     std::vector<char> ansiText(nLen);
-    WideCharToMultiByte(CP_ACP, 0, data->text, -1, ansiText.data(), nLen, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, data->text.c_str(), -1, ansiText.data(), nLen, NULL, NULL);
 
     EnterCriticalSection(&g_cs);
-    if (g_isPlaying) {
+    if (g_isPlaying || loadAquesTalk(&g_engine, data->voiceIndex) != 0) {
         LeaveCriticalSection(&g_cs);
-        free(data->text); delete data; return 0;
-    }
-
-    if (loadAquesTalk(&g_engine, data->voiceIndex) != 0) {
-        LeaveCriticalSection(&g_cs);
-        free(data->text); delete data; return 0;
+        return 0;
     }
 
     g_isPlaying = TRUE;
@@ -166,11 +163,11 @@ DWORD WINAPI PlayThread(LPVOID lpParam) {
         LeaveCriticalSection(&g_cs);
     }
     else {
+        EnterCriticalSection(&g_cs);
         g_isPlaying = FALSE;
+        LeaveCriticalSection(&g_cs);
     }
 
-    free(data->text);
-    delete data;
     return 0;
 }
 
@@ -236,12 +233,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             wchar_t szBuffer[256];
             GetDlgItemText(hDlg, IDC_EDIT1, szBuffer, 256);
 
-            THREAD_DATA* pData = new THREAD_DATA;
-            pData->text = _wcsdup(szBuffer);
+            auto pData = std::make_unique<ThreadData>();
+            pData->text = szBuffer;
             pData->speed = (int)SendMessage(GetDlgItem(hDlg, IDC_SLIDER1), TBM_GETPOS, 0, 0);
             pData->voiceIndex = (int)SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_GETCURSEL, 0, 0);
 
-            CreateThread(NULL, 0, PlayThread, pData, 0, NULL);
+            CreateThread(NULL, 0, PlayThread, pData.release(), 0, NULL);
             return TRUE;
         }
 
