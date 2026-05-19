@@ -3,6 +3,10 @@
 #include <commdlg.h>
 #include <CommCtrl.h>
 #include <vector>
+#include <string>
+#include <memory>
+#include <iomanip>
+#include <sstream>
 #include "resource.h"
 
 #pragma comment(linker,"\"/manifestdependency:type='win32' \
@@ -124,29 +128,24 @@ BOOL getFileName(TCHAR* filename, int size) {
     return GetSaveFileName(&ofn);
 }
 
-struct THREAD_DATA {
-    wchar_t* text;
+struct ThreadData {
+    std::wstring text;
     int speed;
     int voiceIndex;
 };
 
 // --- 再生スレッド ---
 DWORD WINAPI PlayThread(LPVOID lpParam) {
-    THREAD_DATA* data = (THREAD_DATA*)lpParam;
+    std::unique_ptr<ThreadData> data(static_cast<ThreadData*>(lpParam));
 
-    int nLen = WideCharToMultiByte(CP_ACP, 0, data->text, -1, NULL, 0, NULL, NULL);
+    int nLen = WideCharToMultiByte(CP_ACP, 0, data->text.c_str(), -1, NULL, 0, NULL, NULL);
     std::vector<char> ansiText(nLen);
-    WideCharToMultiByte(CP_ACP, 0, data->text, -1, ansiText.data(), nLen, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, data->text.c_str(), -1, ansiText.data(), nLen, NULL, NULL);
 
     EnterCriticalSection(&g_cs);
-    if (g_isPlaying) {
+    if (g_isPlaying || loadAquesTalk(&g_engine, data->voiceIndex) != 0) {
         LeaveCriticalSection(&g_cs);
-        free(data->text); delete data; return 0;
-    }
-
-    if (loadAquesTalk(&g_engine, data->voiceIndex) != 0) {
-        LeaveCriticalSection(&g_cs);
-        free(data->text); delete data; return 0;
+        return 0;
     }
 
     g_isPlaying = TRUE;
@@ -166,12 +165,59 @@ DWORD WINAPI PlayThread(LPVOID lpParam) {
         LeaveCriticalSection(&g_cs);
     }
     else {
+        EnterCriticalSection(&g_cs);
         g_isPlaying = FALSE;
+        LeaveCriticalSection(&g_cs);
     }
 
-    free(data->text);
-    delete data;
     return 0;
+}
+
+std::wstring FormatSrtTime(int totalMs) {
+    int ms = totalMs % 1000;
+    int totalSec = totalMs / 1000;
+    int sec = totalSec % 60;
+    int totalMin = totalSec / 60;
+    int min = totalMin % 60;
+    int hours = totalMin / 60;
+
+    std::wstringstream wss;
+    wss << std::setfill(L'0')
+        << std::setw(2) << hours << L":"
+        << std::setw(2) << min << L":"
+        << std::setw(2) << sec << L","
+        << std::setw(3) << ms;
+    return wss.str();
+}
+
+void saveSrt(const wchar_t* wavFilename, const wchar_t* text, int wavSize) {
+    // WAVサイズから音声の長さ（ミリ秒）を計算
+    // ヘッダサイズ約44バイトを引く
+    int dataSize = (wavSize > 44) ? (wavSize - 44) : wavSize;
+    int durationMs = static_cast<int>((static_cast<double>(dataSize) / 16000.0) * 1000.0);
+
+    std::wstring srtFilename = wavFilename;
+    size_t lastDot = srtFilename.find_last_of(L'.');
+    if (lastDot != std::wstring::npos) {
+        srtFilename = srtFilename.substr(0, lastDot) + L".srt";
+    }
+    else {
+        srtFilename += L".srt";
+    }
+
+    // SRTフォーマットで書き込み
+    FILE* fp = NULL;
+    if (_wfopen_s(&fp, srtFilename.c_str(), L"w, ccs=UTF-8") == 0 && fp) {
+        std::wstring startTime = FormatSrtTime(0); // 0秒からスタート
+        std::wstring endTime = FormatSrtTime(durationMs); // 音声の終了まで
+
+        // SRTの書き出し 
+        fwprintf_s(fp, L"1\n");
+        fwprintf_s(fp, L"%s --> %s\n", startTime.c_str(), endTime.c_str());
+        fwprintf_s(fp, L"%s\n\n", text); // 入力したテキスト
+
+        fclose(fp);
+    }
 }
 
 INT_PTR CALLBACK AboutDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -236,12 +282,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             wchar_t szBuffer[256];
             GetDlgItemText(hDlg, IDC_EDIT1, szBuffer, 256);
 
-            THREAD_DATA* pData = new THREAD_DATA;
-            pData->text = _wcsdup(szBuffer);
+            auto pData = std::make_unique<ThreadData>();
+            pData->text = szBuffer;
             pData->speed = (int)SendMessage(GetDlgItem(hDlg, IDC_SLIDER1), TBM_GETPOS, 0, 0);
             pData->voiceIndex = (int)SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_GETCURSEL, 0, 0);
 
-            CreateThread(NULL, 0, PlayThread, pData, 0, NULL);
+            CreateThread(NULL, 0, PlayThread, pData.release(), 0, NULL);
             return TRUE;
         }
 
@@ -256,7 +302,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
 
         // WAV保存
-        if (LOWORD(wParam) == IDC_BUTTON3 || LOWORD(wParam) == ID_MAKE_WAVE) {
+        if (LOWORD(wParam) == IDC_BUTTON3 || LOWORD(wParam) == ID_MAKE_WAVE || LOWORD(wParam) == ID_MAKE_WAVE_SUB) {
             wchar_t szBuffer[256];
             GetDlgItemText(hDlg, IDC_EDIT1, szBuffer, 256);
             int voiceIdx = (int)SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_GETCURSEL, 0, 0);
@@ -282,6 +328,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                     wchar_t filename[MAX_PATH];
                     if (getFileName(filename, MAX_PATH)) {
                         saveWav(filename, wav, size);
+                        if (LOWORD(wParam) == ID_MAKE_WAVE_SUB) { saveSrt(filename, szBuffer, size); }
                     }
                     tempEngine.pFreeWave(wav);
                 }
