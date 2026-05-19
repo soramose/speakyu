@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="speakyu/speakyu.vcxproj" Id="1caf9353-e0b6-4d4c-b925-3592e554e79d" />
+</Solution>
