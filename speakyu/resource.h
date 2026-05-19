@@ -27,13 +27,15 @@
 #define ID_40009                        40009
 #define ID_PLAY                         40010
 #define ID_STOP                         40011
+#define ID_40012                        40012
+#define ID_MAKE_WAVE_SUB                40013
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        111
-#define _APS_NEXT_COMMAND_VALUE         40012
+#define _APS_NEXT_COMMAND_VALUE         40014
 #define _APS_NEXT_CONTROL_VALUE         1020
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
